@@ -1,0 +1,33 @@
+{
+    "name": "sh1107-oled-controller",
+    "version": "1.0.0",
+    "description": "SH1107 OLED I2C controller for Raspberry Pi using TypeScript",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "dev": "ts-node src/index.ts",
+        "clean": "rm -rf dist"
+    },
+    "keywords": [
+        "raspberry-pi",
+        "oled",
+        "sh1107",
+        "i2c",
+        "typescript"
+    ],
+    "author": "Your Name",
+    "license": "MIT",
+    "dependencies": {
+        "i2c-bus": "^5.2.2"
+    },
+    "devDependencies": {
+        "@types/i2c-bus": "^5.1.2",
+        "@types/node": "^20.0.0",
+        "ts-node": "^10.9.0",
+        "typescript": "^5.0.0"
+    },
+    "engines": {
+        "node": ">=16.0.0"
+    }
+}
