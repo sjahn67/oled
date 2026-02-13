@@ -7,11 +7,11 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "sh1107-2",
+            "name": "sh1107-spi-test",
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}/src/sh1107-2.ts",
+            "program": "${workspaceFolder}/src/index.ts",
             "preLaunchTask": "tsc: build - tsconfig.json",
             "outFiles": [
                 "${workspaceFolder}/dist/**/*.js"
@@ -21,11 +21,11 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "sh1107",
+            "name": "invaders",
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}/src/sh1107.ts",
+            "program": "${workspaceFolder}/src/invaders.ts",
             "preLaunchTask": "tsc: build - tsconfig.json",
             "outFiles": [
                 "${workspaceFolder}/dist/**/*.js"
@@ -34,11 +34,25 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "i2ctest",
+            "name": "galaga",
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}/src/i2c-test.ts",
+            "program": "${workspaceFolder}/src/galaga.ts",
+            "preLaunchTask": "tsc: build - tsconfig.json",
+            "outFiles": [
+                "${workspaceFolder}/dist/**/*.js"
+            ],
+            "console": "internalConsole"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "dht",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/src/dht.ts",
             "preLaunchTask": "tsc: build - tsconfig.json",
             "outFiles": [
                 "${workspaceFolder}/dist/**/*.js"

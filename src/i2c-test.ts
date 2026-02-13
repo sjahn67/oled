@@ -10,8 +10,8 @@ async function main() {
     // 단순히 Display OFF 명령 (0xAE)만 전송
     await bus.i2cWrite(OLED_ADDR, 2, Buffer.from([0x00, 0xAE]));
     console.log("✅ I2C write 성공");
-    // await bus.i2cWrite(OLED_ADDR, 2, Buffer.from([0x00, 0x81]));
-    // console.log("✅ I2C write 성공");
+    await bus.i2cWrite(OLED_ADDR, 2, Buffer.from([0x00, 0x81]));
+    console.log("✅ I2C write 성공");
     await bus.i2cWrite(OLED_ADDR, 2, Buffer.from([0x00, 0x2F]));
     console.log("✅ I2C write 성공");
   } catch (err) {

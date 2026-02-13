@@ -8,8 +8,8 @@ class SH1107Display {
     private bus: i2c.I2CBus;
     private address: number;
     private width: number = 128;
-    private height: number = 64;
-    private pages: number = 8; // 64픽셀 ÷ 8 = 8페이지
+    private height: number = 128;
+    private pages: number = 16; // 128픽셀 ÷ 8 = 16페이지
     private buffer: Buffer;
 
     // SH1107 명령어 상수
@@ -32,14 +32,15 @@ class SH1107Display {
         SET_PRECHARGE: 0xD922,
         SET_VCOM_DETECT: 0xDB20,
         SET_CHARGE_PUMP: 0x8D14,
+        SET_DC_DC_CONTROL: 0xAD8A,
         SET_MEMORY_MODE: 0x2000,
         SET_COLUMN_LOW: 0x00,
         SET_COLUMN_HIGH: 0x10,
         SET_PAGE_START: 0xB0,
-        SET_START_LINE: 0x40,
+        SET_START_LINE: 0xDC00,
     };
 
-    constructor(busNumber: number = 1, address: number = 0x3c) {
+    constructor(busNumber: number = 1, address: number = 0x3D) {
         this.address = address;
         this.buffer = Buffer.alloc((this.width * this.height) / 8);
 
@@ -53,7 +54,7 @@ class SH1107Display {
     private writeCommand(command: number): void {
         let buffer: Buffer;
         if (command > 0xFF) {
-            buffer = Buffer.from([0x40, (0xFF00 & command) >> 8, 0x00ff & command]);
+            buffer = Buffer.from([0x00, (0xFF00 & command) >> 8, 0x00ff & command]);
         } else {
             buffer = Buffer.from([0x00, 0x00ff & command]); // 0x00은 명령어 모드
         }
@@ -81,18 +82,18 @@ class SH1107Display {
             // 디스플레이 설정
             this.writeCommand(SH1107Display.Commands.SET_DISPLAY_CLOCK_DIV);
 
-            this.writeCommand(SH1107Display.Commands.SET_MULTIPLEX_RATIO | 0x3F);
+            this.writeCommand(SH1107Display.Commands.SET_MULTIPLEX_RATIO | 0x7F);
 
             this.writeCommand(SH1107Display.Commands.SET_DISPLAY_OFFSET | 0x00);
 
             this.writeCommand(SH1107Display.Commands.SET_START_LINE | 0x00); // 시작 라인 0
 
-            this.writeCommand(SH1107Display.Commands.SET_CHARGE_PUMP | 0x14);
+            this.writeCommand(SH1107Display.Commands.SET_DC_DC_CONTROL);
 
             this.writeCommand(SH1107Display.Commands.SET_MEMORY_MODE | 0x00);
 
-            this.writeCommand(SH1107Display.Commands.SET_SEGMENT_REMAP_127); // 세그먼트 재매핑
-            this.writeCommand(SH1107Display.Commands.SET_COM_SCAN_DEC); // COM 스캔 방향
+            this.writeCommand(SH1107Display.Commands.SET_SEGMENT_REMAP_0); // 세그먼트 재매핑
+            this.writeCommand(SH1107Display.Commands.SET_COM_SCAN_INC); // COM 스캔 방향
 
             this.writeCommand(SH1107Display.Commands.SET_COM_PINS | 0x12);
 
@@ -337,7 +338,7 @@ class SH1107Display {
 
 // 사용 예제
 async function main() {
-    const display = new SH1107Display(1, 0x3C); // I2C 버스 1, 주소 0x3C
+    const display = new SH1107Display(1, 0x3D); // I2C 버스 1, 주소 0x3D
 
     try {
         await display.initialize();
