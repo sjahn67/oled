@@ -5,6 +5,10 @@ import { SH1107 } from './sh1107-i2c';
 const WIDTH = 128;
 const HEIGHT = 128;
 
+// --- 유틸리티 ---
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+
 
 
 // --- 스프라이트 (Sprites) ---
@@ -97,7 +101,7 @@ async function galagaLoop(oled: SH1107) {
     initEnemies();
 
     // --- 메인 루프 ---
-    while (true) {
+    while (running) {
         // 화면 클리어
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -236,26 +240,41 @@ async function galagaLoop(oled: SH1107) {
         oled.display();
 
         frame++;
-        // 속도 조절 (너무 빠르면 주석 해제)
-        // await delay(1); 
+        await delay(10); // 부드러운 프레임 유지 및 이벤트 루프 기회 제공
     }
 }
+
+let running = true;
+let oledInstance: SH1107 | null = null;
+
+function shutdown() {
+    console.log("\n-> Ctrl+C 감지: 화면을 끄고 안전하게 종료합니다...");
+    running = false;
+    if (oledInstance) {
+        try {
+            oledInstance.clear();
+            oledInstance.display();
+            oledInstance.cleanup();
+        } catch {}
+    }
+    process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // --- 메인 실행 ---
 async function main() {
     const oled = new SH1107();
+    oledInstance = oled;
     try {
         await oled.open();
         await oled.init();
-        await galagaLoop(oled);
+        if (running) await galagaLoop(oled);
     } catch (e) {
         console.error(e);
         oled.cleanup();
     }
 }
 
-process.on('SIGINT', () => {
-    process.exit();
-});
-
-main();
+main();

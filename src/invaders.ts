@@ -116,7 +116,7 @@ async function gameLoop(oled: SH1107) {
     };
     resetAliens();
 
-    while (true) {
+    while (running) {
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -184,13 +184,33 @@ async function gameLoop(oled: SH1107) {
             resetAliens();
         }
 
-        // await delay(1); // CPU 점유율 조절 필요 시 주석 해제
+        await delay(10); // 부드러운 프레임 유지 및 이벤트 루프 기회 제공
     }
 }
+
+let running = true;
+let oledInstance: SH1107 | null = null;
+
+function shutdown() {
+    console.log("\n-> Ctrl+C 감지: 화면을 끄고 안전하게 종료합니다...");
+    running = false;
+    if (oledInstance) {
+        try {
+            oledInstance.clear();
+            oledInstance.display();
+            oledInstance.cleanup();
+        } catch {}
+    }
+    process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // --- 실행 진입점 ---
 async function main() {
     const oled = new SH1107();
+    oledInstance = oled;
     try {
         await oled.open();
 
@@ -198,10 +218,10 @@ async function main() {
         await oled.init();
 
         // 2. 부팅 시퀀스 실행 (로딩 바)
-        await bootSequence(oled);
+        if (running) await bootSequence(oled);
 
         // 3. 게임 시작
-        await gameLoop(oled);
+        if (running) await gameLoop(oled);
 
     } catch (e) {
         console.error(e);
@@ -209,8 +229,4 @@ async function main() {
     }
 }
 
-process.on('SIGINT', () => {
-    process.exit();
-});
-
-main();
+main();
