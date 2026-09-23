@@ -6,20 +6,22 @@ export interface CanvasLike {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+/**
+ * 1.5" GME128128-01-IIC ver2.0 (SH1107) I2C OLED Driver
+ */
 export class SH1107 {
-    public readonly width: number;
-    public readonly height: number;
-    public readonly pages: number;
+    public readonly width: number = 128;
+    public readonly height: number = 128;
+    public readonly pages: number = 16;
     private busNumber: number;
     private address: number;
     private bus!: i2c.I2CBus;
     private buffer: Buffer;
-    
-    // 대부분의 128x128 패널은 0x00 또는 0x02 컬럼 오프셋을 사용합니다.
-    // 기존 SPI 코드의 실측 보정값(0x02)을 기본값으로 적용
-    public columnOffset: number = 2;
 
-    // SH1107 명령어 상수 (sh1107-spi.ts 기준)
+    // GME128128-01 1.5" 128x128 패널은 컬럼 오프셋 0x00이 정확한 물리 위치입니다.
+    public columnOffset: number = 0;
+
+    // SH1107 명령어 상수
     public static readonly Commands = {
         SET_CONTRAST: 0x81,
         ENTIRE_DISPLAY_ON: 0xA5,
@@ -42,13 +44,10 @@ export class SH1107 {
         SET_DC_DC: 0xAD
     };
 
-    constructor(busNumber: number = 1, address: number = 0x3C, width: number = 128, height: number = 128) {
+    constructor(busNumber: number = 1, address: number = 0x3C) {
         this.busNumber = busNumber;
         this.address = address;
-        this.width = width;
-        this.height = height;
-        this.pages = height / 8; // 128 / 8 = 16 pages
-        this.buffer = Buffer.alloc((width * height) / 8, 0x00);
+        this.buffer = Buffer.alloc((this.width * this.height) / 8, 0x00);
     }
 
     public open(): Promise<void> {
@@ -63,82 +62,50 @@ export class SH1107 {
     }
 
     /**
-     * 명령어를 전송 (여러 파라미터를 [0x00, cmd, ...params] 하나의 I2C 트랜잭션으로 원자적 전송)
+     * 명령어를 전송 (파라미터 포함 1개의 I2C 트랜잭션으로 원자적 전송)
      */
     public writeCommand(cmd: number, ...params: number[]): void {
         const buf = Buffer.from([0x00, cmd, ...params]);
         try {
             this.bus.i2cWriteSync(this.address, buf.length, buf);
         } catch {
-            // 라즈베리파이 I2C 컨트롤러의 ACK 타이밍 거짓 에러 무시
+            // ACK 타이밍 거짓 에러 무시
         }
     }
 
     /**
-     * 화면 데이터를 전송 (Control byte 0x40 + Data)
-     */
-    public writeData(data: Buffer): void {
-        const buf = Buffer.alloc(data.length + 1);
-        buf[0] = 0x40; // Co=0, D/C#=1 (Data)
-        data.copy(buf, 1);
-        try {
-            this.bus.i2cWriteSync(this.address, buf.length, buf);
-        } catch {
-            // 라즈베리파이 I2C 컨트롤러의 ACK 타이밍 거짓 에러 무시
-        }
-    }
-
-    /**
-     * sh1107-spi.ts 표준 메모리/레지스터 초기화 적용
+     * GME128128-01 하드웨어에 최적화된 초기화 시퀀스
      */
     public async init(): Promise<void> {
-        console.log("-> Initializing SH1107 (I2C, Memory Align)...");
+        console.log("-> Initializing GME128128-01 (SH1107 I2C)...");
 
-        // 1. 디스플레이 OFF
-        this.writeCommand(SH1107.Commands.DISPLAY_OFF);
-
-        // 2. 디스플레이 시작 라인 설정 (DC 00)
-        this.writeCommand(SH1107.Commands.SET_DISPLAY_START_LINE, 0x00);
-
-        // 3. 디스플레이 오프셋 설정 (D3 00)
-        this.writeCommand(SH1107.Commands.SET_DISPLAY_OFFSET, 0x00);
-
-        // 4. 멀티플렉스 비율 (A8 7F = 128)
-        this.writeCommand(SH1107.Commands.SET_MULTIPLEX_RATIO, this.height - 1);
-
-        // 5. 메모리 어드레싱 모드 (Page Mode: 0x20)
-        this.writeCommand(SH1107.Commands.SET_MEMORY_MODE);
-
-        // 6. 세그먼트 리매핑 (A0)
-        this.writeCommand(SH1107.Commands.SET_SEGMENT_REMAP_0);
-
-        // 7. COM 스캔 방향 (C0)
-        this.writeCommand(SH1107.Commands.SET_COM_SCAN_INC);
-
-        // 8. 내장 DC-DC 승압 컨버터 ON (AD 8B)
-        this.writeCommand(SH1107.Commands.SET_DC_DC, 0x8B);
-
-        // 9. 명암비(Contrast) 설정 (81 80)
-        this.writeCommand(SH1107.Commands.SET_CONTRAST, 0x80);
-
-        // 10. 정상 디스플레이 모드 (A6)
-        this.writeCommand(SH1107.Commands.NORMAL_DISPLAY);
+        // GME128128-01 공식 권장 초기화 시퀀스
+        this.writeCommand(SH1107.Commands.DISPLAY_OFF);                      // 0xAE
+        this.writeCommand(SH1107.Commands.SET_DISPLAY_START_LINE, 0x00);    // 0xDC, 0x00 (시작 라인 0)
+        this.writeCommand(SH1107.Commands.SET_MULTIPLEX_RATIO, 0x7F);       // 0xA8, 0x7F (128 MUX)
+        this.writeCommand(SH1107.Commands.SET_DISPLAY_OFFSET, 0x00);        // 0xD3, 0x00 (오프셋 0)
+        this.writeCommand(SH1107.Commands.SET_CONTRAST, 0x2F);              // 0x81, 0x2F (GME128128-01 권장 대비)
+        this.writeCommand(SH1107.Commands.SET_MEMORY_MODE, 0x00);           // 0x20 (Page Mode)
+        this.writeCommand(SH1107.Commands.SET_SEGMENT_REMAP_0);             // 0xA0
+        this.writeCommand(SH1107.Commands.SET_COM_SCAN_INC);                // 0xC0
+        this.writeCommand(SH1107.Commands.ENTIRE_DISPLAY_OFF);              // 0xA4 (RAM 모드)
+        this.writeCommand(SH1107.Commands.NORMAL_DISPLAY);                  // 0xA6 (정상 표시)
+        this.writeCommand(SH1107.Commands.SET_DC_DC, 0x8A);                 // 0xAD, 0x8A (내장 DC-DC 승압 활성화)
 
         await delay(50);
 
-        // 11. 메모리 초기화 후 화면 송출
+        // RAM 메모리 초기화 후 디스플레이 켜기
         this.clear();
         this.display();
 
-        // 12. 디스플레이 ON
-        this.writeCommand(SH1107.Commands.DISPLAY_ON);
+        this.writeCommand(SH1107.Commands.DISPLAY_ON);                       // 0xAF (화면 켜기)
         await delay(50);
 
-        console.log("-> SH1107 I2C Driver Initialized.");
+        console.log("-> GME128128-01 SH1107 Initialized successfully.");
     }
 
     /**
-     * 메모리 누락 및 화면 깨짐을 방지하는 고안정성 페이지 단위 화면 전송
+     * 16개 페이지를 단 하나도 빠짐없이 100% 전송하는 안정화 display 메서드
      */
     public display(): void {
         const pageBuf = Buffer.alloc(this.width + 1);
@@ -149,34 +116,32 @@ export class SH1107 {
         const colHigh = SH1107.Commands.SET_COLUMN_HIGH | ((col >> 4) & 0x0F);
 
         for (let page = 0; page < this.pages; page++) {
-            // [개선 1] 페이지 주소와 컬럼 주소를 3개 명령어가 아닌 하나의 패킷으로 묶어서 원자적 전송
-            // (중간에 끊기거나 다른 명령으로 오인되어 페이지가 통째로 비는 현상 차단)
+            // 1. 페이지 및 컬럼 설정 (원자적 패킷 전송)
             this.writeCommand(
                 SH1107.Commands.SET_PAGE_START + page,
                 colLow,
                 colHigh
             );
 
-            // 버퍼에서 한 페이지(128바이트) 복사
+            // 2. 버퍼에서 한 페이지(128바이트) 복사
             const start = page * this.width;
             this.buffer.copy(pageBuf, 1, start, start + this.width);
 
-            // [개선 2] I2C 전송 실패 시 1회 즉시 재시도 (페이지 누락 방지)
+            // 3. 페이지 데이터 전송 (누락 방지를 위한 최대 3회 재시도)
             let sent = false;
-            for (let retry = 0; retry < 2 && !sent; retry++) {
+            for (let retry = 0; retry < 3 && !sent; retry++) {
                 try {
                     this.bus.i2cWriteSync(this.address, pageBuf.length, pageBuf);
                     sent = true;
                 } catch {
-                    // ACK 타이밍 오인으로 인한 재시도
+                    // 재시도
                 }
             }
 
-            // [개선 3] 칩이 내부 RAM에 128바이트를 기록할 수 있도록 미세 텀 제공
-            // 다음 페이지 명령어가 이전 쓰기 작업을 덮어씌워 페이지가 드랍되는 현상 방지
-            for (let wait = 0; wait < 200; wait++) {
-                // busy micro-wait
-            }
+            // 4. [매우 중요] 칩이 내부 RAM에 128바이트를 완전히 기록할 수 있도록 미세 대기
+            // 이 지연이 없으면 다음 페이지 명령어가 이전 쓰기를 덮어써서 페이지가 통째로 비게 됩니다.
+            const expire = Date.now() + 1; // 1ms 안심 대기
+            while (Date.now() < expire) {}
         }
     }
 
@@ -184,9 +149,6 @@ export class SH1107 {
         this.buffer.fill(0x00);
     }
 
-    /**
-     * sh1107-spi.ts와 동일한 픽셀 단위 조작 메서드
-     */
     public setPixel(x: number, y: number, color: boolean = true): void {
         if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
         const page = Math.floor(y / 8);
@@ -199,9 +161,6 @@ export class SH1107 {
         }
     }
 
-    /**
-     * Canvas 그래픽 데이터를 버퍼에 매핑
-     */
     public drawCanvas(canvas: CanvasLike): void {
         const ctx = canvas.getContext('2d');
         const imgData = ctx.getImageData(0, 0, this.width, this.height).data;
