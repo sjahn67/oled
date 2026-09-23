@@ -14,7 +14,10 @@ export class SH1107 {
     private address: number;
     private bus!: i2c.I2CBus;
     private buffer: Buffer;
-    public columnOffset: number = 0; // 패널에 따라 0x00 또는 0x02
+    
+    // 대부분의 128x128 패널은 0x00 또는 0x02 컬럼 오프셋을 사용합니다.
+    // 기존 SPI 코드의 실측 보정값(0x02)을 기본값으로 적용
+    public columnOffset: number = 2;
 
     // SH1107 명령어 상수 (sh1107-spi.ts 기준)
     public static readonly Commands = {
@@ -31,7 +34,7 @@ export class SH1107 {
         SET_SEGMENT_REMAP_127: 0xA1,
         SET_COM_SCAN_INC: 0xC0,
         SET_COM_SCAN_DEC: 0xC8,
-        SET_MEMORY_MODE: 0x20,
+        SET_MEMORY_MODE: 0x20, // Page Addressing Mode
         SET_COLUMN_LOW: 0x00,
         SET_COLUMN_HIGH: 0x10,
         SET_PAGE_START: 0xB0,
@@ -60,7 +63,7 @@ export class SH1107 {
     }
 
     /**
-     * 명령어를 전송 (2바이트 더블 커맨드는 하나의 I2C 트랜잭션으로 원자적 전송)
+     * 명령어를 전송 (여러 파라미터를 [0x00, cmd, ...params] 하나의 I2C 트랜잭션으로 원자적 전송)
      */
     public writeCommand(cmd: number, ...params: number[]): void {
         const buf = Buffer.from([0x00, cmd, ...params]);
@@ -103,28 +106,31 @@ export class SH1107 {
         // 4. 멀티플렉스 비율 (A8 7F = 128)
         this.writeCommand(SH1107.Commands.SET_MULTIPLEX_RATIO, this.height - 1);
 
-        // 5. 세그먼트 리매핑 (A0)
+        // 5. 메모리 어드레싱 모드 (Page Mode: 0x20)
+        this.writeCommand(SH1107.Commands.SET_MEMORY_MODE);
+
+        // 6. 세그먼트 리매핑 (A0)
         this.writeCommand(SH1107.Commands.SET_SEGMENT_REMAP_0);
 
-        // 6. COM 스캔 방향 (C0)
+        // 7. COM 스캔 방향 (C0)
         this.writeCommand(SH1107.Commands.SET_COM_SCAN_INC);
 
-        // 7. 내장 DC-DC 승압 컨버터 ON (AD 8B)
+        // 8. 내장 DC-DC 승압 컨버터 ON (AD 8B)
         this.writeCommand(SH1107.Commands.SET_DC_DC, 0x8B);
 
-        // 8. 명암비(Contrast) 설정 (81 80)
+        // 9. 명암비(Contrast) 설정 (81 80)
         this.writeCommand(SH1107.Commands.SET_CONTRAST, 0x80);
 
-        // 9. 정상 디스플레이 모드 (A6)
+        // 10. 정상 디스플레이 모드 (A6)
         this.writeCommand(SH1107.Commands.NORMAL_DISPLAY);
 
         await delay(50);
 
-        // 10. 메모리 초기화 후 화면 송출
+        // 11. 메모리 초기화 후 화면 송출
         this.clear();
         this.display();
 
-        // 11. 디스플레이 ON
+        // 12. 디스플레이 ON
         this.writeCommand(SH1107.Commands.DISPLAY_ON);
         await delay(50);
 
@@ -132,29 +138,44 @@ export class SH1107 {
     }
 
     /**
-     * sh1107-spi.ts 메모리 매핑 방식과 동일하게 버퍼를 페이지 단위로 화면에 전송
+     * 메모리 누락 및 화면 깨짐을 방지하는 고안정성 페이지 단위 화면 전송
      */
     public display(): void {
         const pageBuf = Buffer.alloc(this.width + 1);
         pageBuf[0] = 0x40; // Control Byte: Data Mode
 
+        const col = this.columnOffset;
+        const colLow = SH1107.Commands.SET_COLUMN_LOW | (col & 0x0F);
+        const colHigh = SH1107.Commands.SET_COLUMN_HIGH | ((col >> 4) & 0x0F);
+
         for (let page = 0; page < this.pages; page++) {
-            // 페이지 시작 주소 (B0 + page)
-            this.writeCommand(SH1107.Commands.SET_PAGE_START + page);
+            // [개선 1] 페이지 주소와 컬럼 주소를 3개 명령어가 아닌 하나의 패킷으로 묶어서 원자적 전송
+            // (중간에 끊기거나 다른 명령으로 오인되어 페이지가 통째로 비는 현상 차단)
+            this.writeCommand(
+                SH1107.Commands.SET_PAGE_START + page,
+                colLow,
+                colHigh
+            );
 
-            // 컬럼 주소 설정 (Lower Column + Higher Column)
-            const col = this.columnOffset;
-            this.writeCommand(SH1107.Commands.SET_COLUMN_LOW | (col & 0x0F));
-            this.writeCommand(SH1107.Commands.SET_COLUMN_HIGH | ((col >> 4) & 0x0F));
-
-            // 버퍼에서 한 페이지(128바이트) 복사 후 전송
+            // 버퍼에서 한 페이지(128바이트) 복사
             const start = page * this.width;
             this.buffer.copy(pageBuf, 1, start, start + this.width);
 
-            try {
-                this.bus.i2cWriteSync(this.address, pageBuf.length, pageBuf);
-            } catch {
-                // 라즈베리파이 I2C 컨트롤러의 ACK 타이밍 거짓 에러 무시
+            // [개선 2] I2C 전송 실패 시 1회 즉시 재시도 (페이지 누락 방지)
+            let sent = false;
+            for (let retry = 0; retry < 2 && !sent; retry++) {
+                try {
+                    this.bus.i2cWriteSync(this.address, pageBuf.length, pageBuf);
+                    sent = true;
+                } catch {
+                    // ACK 타이밍 오인으로 인한 재시도
+                }
+            }
+
+            // [개선 3] 칩이 내부 RAM에 128바이트를 기록할 수 있도록 미세 텀 제공
+            // 다음 페이지 명령어가 이전 쓰기 작업을 덮어씌워 페이지가 드랍되는 현상 방지
+            for (let wait = 0; wait < 200; wait++) {
+                // busy micro-wait
             }
         }
     }
