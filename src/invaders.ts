@@ -1,4 +1,4 @@
-import { createCanvas } from 'canvas';
+import { createCanvas, CanvasRenderingContext2D } from 'canvas';
 import { SH1107 } from './sh1107-i2c';
 
 
