@@ -7,7 +7,8 @@ export interface CanvasLike {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * 1.5" GME128128-01-IIC ver2.0 (SH1107) I2C OLED Driver
+ * 1.5" GME128128-01 (SH1107) I2C OLED Driver
+ * i2c-test.ts에서 100% 정상 작동이 검증된 전송 시퀀스 기반 구현
  */
 export class SH1107 {
     public readonly width: number = 128;
@@ -18,7 +19,6 @@ export class SH1107 {
     private bus!: i2c.I2CBus;
     private buffer: Buffer;
 
-    // GME128128-01 1.5" 128x128 패널은 컬럼 오프셋 0x00이 정확한 물리 위치입니다.
     public columnOffset: number = 0;
 
     // SH1107 명령어 상수
@@ -36,13 +36,14 @@ export class SH1107 {
         SET_SEGMENT_REMAP_127: 0xA1,
         SET_COM_SCAN_INC: 0xC0,
         SET_COM_SCAN_DEC: 0xC8,
-        SET_MEMORY_MODE: 0x20, // Page Addressing Mode
+        SET_MEMORY_MODE: 0x20,
         SET_COLUMN_LOW: 0x00,
         SET_COLUMN_HIGH: 0x10,
         SET_PAGE_START: 0xB0,
         SET_DISPLAY_START_LINE: 0xDC,
         SET_DC_DC: 0xAD
     };
+
 
     constructor(busNumber: number = 1, address: number = 0x3C) {
         this.busNumber = busNumber;
@@ -62,86 +63,81 @@ export class SH1107 {
     }
 
     /**
-     * 명령어를 전송 (파라미터 포함 1개의 I2C 트랜잭션으로 원자적 전송)
+     * 명령어를 SMBus writeByte 방식으로 전송 (i2c-test.ts 검증 완료)
      */
     public writeCommand(cmd: number, ...params: number[]): void {
-        const buf = Buffer.from([0x00, cmd, ...params]);
         try {
-            this.bus.i2cWriteSync(this.address, buf.length, buf);
+            this.bus.writeByteSync(this.address, 0x00, cmd);
+            for (const p of params) {
+                this.bus.writeByteSync(this.address, 0x00, p);
+            }
         } catch {
-            // ACK 타이밍 거짓 에러 무시
+            // ACK 타이밍 오인 에러 무시
         }
     }
 
+
     /**
-     * GME128128-01 하드웨어에 최적화된 초기화 시퀀스
+     * i2c-test.ts에서 100% 정상 동작이 검증된 초기화 시퀀스
      */
     public async init(): Promise<void> {
-        console.log("-> Initializing GME128128-01 (SH1107 I2C)...");
+        console.log("-> Initializing SH1107 OLED...");
 
-        // GME128128-01 공식 권장 초기화 시퀀스
-        this.writeCommand(SH1107.Commands.DISPLAY_OFF);                      // 0xAE
-        this.writeCommand(SH1107.Commands.SET_DISPLAY_START_LINE, 0x00);    // 0xDC, 0x00 (시작 라인 0)
-        this.writeCommand(SH1107.Commands.SET_MULTIPLEX_RATIO, 0x7F);       // 0xA8, 0x7F (128 MUX)
-        this.writeCommand(SH1107.Commands.SET_DISPLAY_OFFSET, 0x00);        // 0xD3, 0x00 (오프셋 0)
-        this.writeCommand(SH1107.Commands.SET_CONTRAST, 0x2F);              // 0x81, 0x2F (GME128128-01 권장 대비)
-        this.writeCommand(SH1107.Commands.SET_MEMORY_MODE, 0x00);           // 0x20 (Page Mode)
-        this.writeCommand(SH1107.Commands.SET_SEGMENT_REMAP_0);             // 0xA0
-        this.writeCommand(SH1107.Commands.SET_COM_SCAN_INC);                // 0xC0
-        this.writeCommand(SH1107.Commands.ENTIRE_DISPLAY_OFF);              // 0xA4 (RAM 모드)
-        this.writeCommand(SH1107.Commands.NORMAL_DISPLAY);                  // 0xA6 (정상 표시)
-        this.writeCommand(SH1107.Commands.SET_DC_DC, 0x8A);                 // 0xAD, 0x8A (내장 DC-DC 승압 활성화)
+        const initCmds = [
+            0xAE,       // Display OFF
+            0xD5, 0x50, // Set Divide Ratio / Oscillator Frequency
+            0x20,       // Page Addressing Mode
+            0x81, 0x80, // Contrast Control (50%)
+            0xAD, 0x8B, // Built-in DC-DC ON
+            0x30,       // Set Discharge/Precharge
+            0x40,       // Display Start Line
+            0xA0,       // Segment Remap
+            0xC0,       // Common Scan Direction
+            0xA4,       // Output follows RAM
+            0xA6,       // Normal Display
+            0xAF        // Display ON
+        ];
+
+        for (const cmd of initCmds) {
+            this.writeCommand(cmd);
+            await delay(2);
+        }
 
         await delay(50);
 
-        // RAM 메모리 초기화 후 디스플레이 켜기
+        // 화면 클리어 (노이즈 제거)
         this.clear();
         this.display();
 
-        this.writeCommand(SH1107.Commands.DISPLAY_ON);                       // 0xAF (화면 켜기)
-        await delay(50);
-
-        console.log("-> GME128128-01 SH1107 Initialized successfully.");
+        console.log("-> SH1107 OLED Initialized successfully.");
     }
 
     /**
-     * 16개 페이지를 단 하나도 빠짐없이 100% 전송하는 안정화 display 메서드
+     * i2c-test.ts와 100% 동일한 페이지 매핑 및 버퍼 전송
      */
     public display(): void {
         const pageBuf = Buffer.alloc(this.width + 1);
-        pageBuf[0] = 0x40; // Control Byte: Data Mode
+        pageBuf[0] = 0x40; // Data Control Byte
 
-        const col = this.columnOffset;
-        const colLow = SH1107.Commands.SET_COLUMN_LOW | (col & 0x0F);
-        const colHigh = SH1107.Commands.SET_COLUMN_HIGH | ((col >> 4) & 0x0F);
+        const colLow = 0x00 | (this.columnOffset & 0x0F);
+        const colHigh = 0x10 | ((this.columnOffset >> 4) & 0x0F);
 
         for (let page = 0; page < this.pages; page++) {
-            // 1. 페이지 및 컬럼 설정 (원자적 패킷 전송)
-            this.writeCommand(
-                SH1107.Commands.SET_PAGE_START + page,
-                colLow,
-                colHigh
-            );
+            // 1. 매 페이지마다 컬럼과 페이지를 개별 SMBus 명령으로 정확히 설정 (위치 틀어짐 방지)
+            this.writeCommand(0xB0 + page); // Page address
+            this.writeCommand(colLow);      // Lower column
+            this.writeCommand(colHigh);     // Higher column
 
             // 2. 버퍼에서 한 페이지(128바이트) 복사
             const start = page * this.width;
             this.buffer.copy(pageBuf, 1, start, start + this.width);
 
-            // 3. 페이지 데이터 전송 (누락 방지를 위한 최대 3회 재시도)
-            let sent = false;
-            for (let retry = 0; retry < 3 && !sent; retry++) {
-                try {
-                    this.bus.i2cWriteSync(this.address, pageBuf.length, pageBuf);
-                    sent = true;
-                } catch {
-                    // 재시도
-                }
+            // 3. I2C 데이터 전송
+            try {
+                this.bus.i2cWriteSync(this.address, pageBuf.length, pageBuf);
+            } catch {
+                // 라즈베리파이 ACK 오류 무시
             }
-
-            // 4. [매우 중요] 칩이 내부 RAM에 128바이트를 완전히 기록할 수 있도록 미세 대기
-            // 이 지연이 없으면 다음 페이지 명령어가 이전 쓰기를 덮어써서 페이지가 통째로 비게 됩니다.
-            const expire = Date.now() + 1; // 1ms 안심 대기
-            while (Date.now() < expire) {}
         }
     }
 
@@ -181,7 +177,7 @@ export class SH1107 {
 
     public cleanup(): void {
         try {
-            this.writeCommand(SH1107.Commands.DISPLAY_OFF);
+            this.writeCommand(0xAE); // Display OFF
         } catch {}
         if (this.bus) {
             try {
