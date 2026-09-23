@@ -1,131 +1,14 @@
-// @ts-ignore
-import * as spi from 'spi-device';
-import rpio from 'rpio';
-import { createCanvas, Canvas, CanvasRenderingContext2D } from 'canvas';
+import { createCanvas } from 'canvas';
+import { SH1107 } from './sh1107-i2c';
+
 
 // --- 하드웨어 설정 ---
 const WIDTH = 128;
 const HEIGHT = 128;
-// [수정] 속도를 1MHz로 낮춰 안정성 확보 (노이즈 방지)
-const SPI_SPEED_HZ = 1000000;
-const PIN_DC = 24;
-const PIN_RST = 25;
 
 // --- 유틸리티 ---
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- SH1107 드라이버 ---
-class SH1107 {
-    private spiDevice: any;
-    private buffer: Buffer;
-
-    constructor() {
-        this.buffer = Buffer.alloc((WIDTH * HEIGHT) / 8, 0x00);
-        rpio.init({ mapping: 'gpio' });
-        rpio.open(PIN_DC, rpio.OUTPUT, rpio.LOW);
-        rpio.open(PIN_RST, rpio.OUTPUT, rpio.LOW);
-    }
-
-    public open() {
-        return new Promise<void>((resolve, reject) => {
-            this.spiDevice = spi.open(0, 0, { mode: 0 }, (err: any) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
-    }
-
-    private writeData(data: Buffer) {
-        rpio.write(PIN_DC, rpio.HIGH);
-        this.spiDevice.transferSync([{ sendBuffer: data, byteLength: data.length, speedHz: SPI_SPEED_HZ }]);
-    }
-
-    private writeCommand(cmd: number) {
-        rpio.write(PIN_DC, rpio.LOW);
-        this.spiDevice.transferSync([{ sendBuffer: Buffer.from([cmd]), byteLength: 1, speedHz: SPI_SPEED_HZ }]);
-    }
-
-    public async init() {
-        // 1. 하드웨어 리셋
-        console.log("-> Hardware Reset...");
-        rpio.write(PIN_RST, rpio.HIGH); await delay(50);
-        rpio.write(PIN_RST, rpio.LOW); await delay(100);
-        rpio.write(PIN_RST, rpio.HIGH); await delay(100);
-
-        // 2. 초기화 커맨드 전송
-        const cmds = [
-            0xAE,       // Display OFF
-            0x00,       // Set Lower Column Address
-            0x10,       // Set Higher Column Address
-            0x20,       // Set Memory Addressing Mode
-            0x81,       // Page Addressing Mode
-            0xA0,       // Segment Re-map (좌우 반전이 필요하면 0xA1)
-            0xC0,       // Scan Direction (상하 반전이 필요하면 0xC8)
-            0xDC, 0x00, // Set Display Start Line
-            0x81, 0x80, // Contrast Control
-            0xD5, 0x50, // Display Clock Divide Ratio
-            0xD9, 0x22, // Pre-charge Period
-            0xDB, 0x35, // VCOMH Deselect Level
-            0xA8, 0x7F, // Multiplex Ratio (128)
-            0xD3, 0x00, // Display Offset
-            0xA4,       // Entire Display ON (Resume)
-            0xA6,       // Normal Display
-            0xAF        // Display ON
-        ];
-
-        for (const c of cmds) this.writeCommand(c);
-        await delay(100);
-
-        // 3. 초기화 직후 화면 깨끗하게 지우기 (매우 중요)
-        this.clear();
-        this.display();
-        console.log("-> Driver Initialized.");
-    }
-
-    public display() {
-        const pages = HEIGHT / 8;
-        for (let page = 0; page < pages; page++) {
-            this.writeCommand(0xB0 + page);
-
-            // [수정] 화면 밀림 방지를 위한 오프셋 (0x02가 일반적)
-            // 만약 그래도 밀린다면 0x00 또는 0x04로 변경해보세요.
-            this.writeCommand(0x02);
-
-            this.writeCommand(0x10);
-
-            const start = page * WIDTH;
-            this.writeData(this.buffer.slice(start, start + WIDTH));
-        }
-    }
-
-    public clear() {
-        this.buffer.fill(0);
-    }
-
-    public drawCanvas(canvas: Canvas) {
-        const ctx = canvas.getContext('2d');
-        const imgData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
-        this.clear();
-        for (let y = 0; y < HEIGHT; y++) {
-            for (let x = 0; x < WIDTH; x++) {
-                if (imgData[(y * WIDTH + x) * 4] > 128) {
-                    const page = Math.floor(y / 8);
-                    const bit = y % 8;
-                    const idx = x + (page * WIDTH);
-                    if (idx < this.buffer.length) {
-                        this.buffer[idx] |= (1 << bit);
-                    }
-                }
-            }
-        }
-    }
-
-    public cleanup() {
-        if (this.spiDevice) this.spiDevice.closeSync();
-        rpio.close(PIN_DC);
-        rpio.close(PIN_RST);
-    }
-}
 
 // --- 부팅(초기화) 시퀀스 데모 ---
 async function bootSequence(oled: SH1107) {
